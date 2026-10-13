@@ -1,0 +1,193 @@
+#!/usr/bin/bash
+# Input: exactly TOKEN|POSITIVE_NUMERIC_USER_ID followed by one LF, then EOF.
+# Invoked by root over management SSH; drop to hermes BEFORE reading any secrets
+# or touching its writable home. No service activation or pairing revocation.
+set +x
+set +v
+set +a
+export LC_ALL=C
+umask 077
+ulimit -c 0
+
+discord_read_input() {
+    local +x payload
+    # NUL and oversized input fail closed. Ordinary read would silently skip NUL.
+    if IFS= read -r -d '' -n 1100 payload; then
+        return 1
+    fi
+    [[ $payload == *$'\n' ]] || return 1
+    payload=${payload%$'\n'}
+    [[ $payload == *'|'* ]] || return 1
+    discord_token=${payload%%|*}
+    discord_user=${payload#*|}
+    [[ $discord_token =~ ^[A-Za-z0-9._-]{1,1024}$ &&
+       $discord_user =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+    # Equal-length decimal strings compare lexically; Bash integers are signed.
+    # shellcheck disable=SC2071
+    [[ ${#discord_user} != 20 || ! $discord_user > 18446744073709551615 ]]
+}
+
+discord_filter_env() {
+    # Parse assignments as data, never source/eval them. Track quoted multiline
+    # values so assignment-looking text inside unrelated settings is preserved.
+    # Refuse unterminated strings rather than hiding the new settings inside one.
+    awk '
+        function owned(key) {
+            return key ~ /^(DISCORD_(BOT_TOKEN|ALLOWED_USERS|ALLOW_ALL_USERS|ALLOWED_ROLES|ALLOWED_CHANNELS|ALLOW_BOTS)|GATEWAY_(ALLOWED_USERS|ALLOW_ALL_USERS))$/
+        }
+        {
+            raw = $0
+            line = raw
+            sub(/\r$/, "", line)
+            # Accept LF/CRLF, but fail closed on CR-only/mixed record separators.
+            # Otherwise a managed assignment could swallow unrelated settings.
+            if (index(line, "\r")) {
+                invalid = 1
+                exit 1
+            }
+            # Encoding/NUL damage and multiline quoted keys are outside this
+            # small editor; reject rather than corrupt unrelated assignments.
+            if (index(line, sprintf("%c", 0))) {
+                invalid = 1
+                exit 1
+            }
+            if (quote == "") {
+                drop = 0
+                value = ""
+                keytext = line
+                sub(/^[ \t]*(export[ \t]+)?/, "", keytext)
+                if (substr(keytext, 1, 1) == "\047" &&
+                    !match(keytext, /^\047[^\047]*\047/)) {
+                    invalid = 1
+                    exit 1
+                }
+                if (match(line, /^[ \t]*(export[ \t]+)?(\047[^\047]*\047|[^= \t\r#]+)[ \t]*=/)) {
+                    key = substr(line, 1, RLENGTH)
+                    value = substr(line, RLENGTH + 1)
+                    sub(/^[ \t]*/, "", key)
+                    sub(/^export[ \t]+/, "", key)
+                    sub(/[ \t]*=$/, "", key)
+                    if (substr(key, 1, 1) == "\047")
+                        key = substr(key, 2, length(key) - 2)
+                    drop = owned(key)
+                    sub(/^[ \t]*/, "", value)
+                    first = substr(value, 1, 1)
+                    if (first == "\"" || first == "\047") {
+                        quote = first
+                        value = substr(value, 2)
+                    }
+                }
+            } else {
+                value = line
+            }
+            if (quote != "") {
+                for (i = 1; i <= length(value); i++) {
+                    char = substr(value, i, 1)
+                    nextchar = substr(value, i + 1, 1)
+                    # python-dotenv tokenizes a backslash followed by the quote
+                    # as escaped, even when another backslash precedes it.
+                    if (char == "\\" && nextchar == quote) {
+                        i++
+                    } else if (char == quote) {
+                        quote = ""
+                        break
+                    }
+                }
+            }
+            if (!drop)
+                print raw
+        }
+        END { if (quote != "" || invalid) exit 1 }
+    '
+}
+
+discord_update_env() (
+    # This internal function accepts a home for unprivileged fixture tests.
+    # The executable has NO destination/account/command override: main hardcodes
+    # /var/lib/hermes, and writes always run with the hermes UID and GID.
+    local +x home=$1 component temporary='' lock_fd
+    [[ $home == /* ]] || return 1
+    component=$home
+    while [[ $component != / ]]; do
+        [[ ! -L $component && -d $component ]] || return 1
+        component=${component%/*}
+        [[ -n $component ]] || component=/
+    done
+    cd -P -- "$home" || return 1
+    [[ $PWD == "$home" && -O . ]] || return 1
+    chgrp "$(id -g)" . || return 1
+    chmod 00700 . || return 1
+    [[ ! -L .hermes ]] || return 1
+    if [[ ! -e .hermes ]]; then
+        mkdir -- .hermes || return 1
+    fi
+    [[ -d .hermes && -O .hermes ]] || return 1
+    cd -P -- .hermes || return 1
+    [[ $PWD == "$home/.hermes" ]] || return 1
+    chgrp "$(id -g)" . || return 1
+    chmod 00700 . || return 1
+    # Lock the directory inode, not a user-replaceable lockfile. Relative paths
+    # keep all reads/writes in this directory even if its name is moved.
+    exec {lock_fd}< . || return 1
+    flock -x "$lock_fd" || return 1
+    [[ ! -L .env && ( ! -e .env || ( -f .env && -O .env ) ) ]] || return 1
+
+    temporary=$(mktemp -- .env.tmp.XXXXXXXXXX) || return 1
+    trap 'rm -f -- "$temporary"' EXIT
+    trap 'exit 1' HUP INT TERM
+    if [[ -e .env ]]; then
+        discord_filter_env < .env > "$temporary" || return 1
+    fi
+    # Verified against Hermes v0.21.6 (818c13be1dc4fd28987e1e881a9408224afd4535):
+    # plugins/platforms/discord/adapter.py and gateway/authz_mixin.py.
+    # Blank grants fall back to YAML; nonempty JSON [] means an empty allowlist.
+    # Global grants are a union with Discord grants, hence must also be cleared.
+    builtin printf '%s\n' \
+        "DISCORD_BOT_TOKEN=$discord_token" \
+        "DISCORD_ALLOWED_USERS=$discord_user" \
+        'DISCORD_ALLOW_ALL_USERS=false' \
+        'DISCORD_ALLOWED_ROLES=[]' \
+        'DISCORD_ALLOWED_CHANNELS=[]' \
+        'DISCORD_ALLOW_BOTS=none' \
+        'GATEWAY_ALLOWED_USERS=[]' \
+        'GATEWAY_ALLOW_ALL_USERS=false' >> "$temporary" || return 1
+    chmod 0600 "$temporary" || return 1
+    # Same-filesystem rename: readers see either the complete old or new file.
+    # -T never follows an existing destination symlink or directory.
+    [[ ! -L .env && ( ! -e .env || -f .env ) ]] || return 1
+    mv -fT -- "$temporary" .env || return 1
+    temporary=
+    trap - EXIT
+)
+
+discord_main() {
+    local +x discord_token discord_user hermes_uid
+    [[ $# == 0 ]] || {
+        builtin printf '%s\n' 'This helper accepts credentials on stdin, not arguments.' >&2
+        return 2
+    }
+    if (( EUID == 0 )); then
+        # No secret has been read at this point. runuser selects hermes primary
+        # group too; all created directories/files belong to hermes:hermes.
+        exec runuser -u hermes -- /usr/local/libexec/hermes-voice/configure-discord
+    fi
+    hermes_uid=$(id -u hermes 2>/dev/null) || return 2
+    [[ $EUID == "$hermes_uid" && $(id -gn) == hermes ]] || {
+        builtin printf '%s\n' 'Run this helper through root management SSH.' >&2
+        return 2
+    }
+    if ! discord_read_input; then
+        builtin printf '%s\n' 'Invalid Discord credentials; settings were not changed.' >&2
+        return 2
+    fi
+    if ! discord_update_env /var/lib/hermes >/dev/null 2>&1; then
+        builtin printf '%s\n' 'Could not safely update the Hermes environment file.' >&2
+        return 2
+    fi
+}
+
+# Sourcing exposes the same validator/writer to tests without a root filesystem,
+# root privileges, accounts, VM provisioning, or insecure executable overrides.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    discord_main "$@"
+fi

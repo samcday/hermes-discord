@@ -1,0 +1,40 @@
+[Unit]
+Description=Hermes Discord voice agent
+Wants=network-online.target
+After=network-online.target systemd-tmpfiles-setup.service
+RequiresMountsFor=/var/lib/hermes
+ConditionPathIsMountPoint=/var/lib/hermes
+ConditionPathExists=/var/lib/hermes/.hermes/voice-ready
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/var/lib/hermes/workspace
+Environment=HOME=/var/lib/hermes
+Environment=HERMES_HOME=/var/lib/hermes/.hermes
+Environment=HF_HOME=/var/lib/hermes/.cache/huggingface
+Environment=PATH=/var/lib/hermes/.local/bin:/usr/local/bin:/usr/bin
+Environment=HERMES_SUPERVISED_CHILD=1
+Environment=PYTHONUNBUFFERED=1
+# Enter Fedora's service domain through an OS-owned interpreter before invoking
+# the home-resident runtime. Direct execution from var_lib_t is denied by init_t.
+ExecStart=/usr/bin/bash /usr/local/libexec/hermes-voice/agent gateway run --external-supervisor
+Restart=always
+RestartSec=5s
+RestartForceExitStatus=75
+SuccessExitStatus=75
+RestartPreventExitStatus=78
+KillMode=mixed
+TimeoutStopSec=300s
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hermes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

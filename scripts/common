@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Sourced by the small host-side entry points; no credentials live in this repo.
+set -euo pipefail
+
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/hermes-voice"
+LIBVIRT_URI=qemu:///session
+VM_NAME=hermes-voice
+SSH_PORT=22222
+
+die() {
+    printf 'hermes-voice: %s\n' "$*" >&2
+    exit 1
+}
+
+require() {
+    command -v "$1" >/dev/null || die "Required command not found: $1"
+}

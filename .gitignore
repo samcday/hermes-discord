@@ -1,0 +1,12 @@
+/mkosi.output/
+/mkosi.cache/
+/mkosi.builddir/
+/mkosi.workspace/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.qcow2
+*.raw
+.env
+__pycache__/

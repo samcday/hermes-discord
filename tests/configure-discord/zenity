@@ -1,0 +1,40 @@
+#!/usr/bin/bash
+# Fixture only: no real dialogs or credentials.
+set -euo pipefail
+expected=(
+    --forms '--title=Configure Hermes Discord'
+    '--text=Enter the bot token and your Discord user ID. Existing pairing approvals are not revoked.'
+    '--add-password=Discord bot token'
+    '--add-entry=Discord allowed-user ID (numeric)' '--separator=|'
+)
+[[ $# == "${#expected[@]}" ]] || exit 90
+for argument in "${expected[@]}"; do
+    [[ $1 == "$argument" ]] || exit 90
+    shift
+done
+printf 'dialog\n' >> "$TEST_EVENT_LOG"
+case $STUB_FORM in
+    success) printf 'FAKE.discord-token_42|123456789012345678\n' ;;
+    cancel)
+        # Even partial stdout/stderr on cancellation must remain private.
+        printf 'FAKE.discord-token_42'
+        printf 'FAKE.discord-token_42\n' >&2
+        exit 1
+        ;;
+    failure) printf 'FAKE.discord-token_42\n' >&2; exit 5 ;;
+    bad-id) printf 'FAKE.discord-token_42|not-a-number\n' ;;
+    id-list) printf 'FAKE.discord-token_42|123,456\n' ;;
+    negative-id) printf 'FAKE.discord-token_42|-123\n' ;;
+    zero-id) printf 'FAKE.discord-token_42|0\n' ;;
+    leading-zero-id) printf 'FAKE.discord-token_42|0123\n' ;;
+    overflow-id) printf 'FAKE.discord-token_42|18446744073709551616\n' ;;
+    separator) printf 'FAKE.discord-token_42|injected|123456789012345678\n' ;;
+    newline) printf 'FAKE.discord-token_42\nINJECTED=1|123456789012345678\n' ;;
+    control) printf 'FAKE.discord-token_42\t|123456789012345678\n' ;;
+    nul) printf 'FAKE.discord-token_42\0|123456789012345678\n' ;;
+    empty) printf '|123456789012345678\n' ;;
+    missing-lf) printf 'FAKE.discord-token_42|123456789012345678' ;;
+    extra-lf) printf 'FAKE.discord-token_42|123456789012345678\n\n' ;;
+    oversized) printf '%01100d|123456789012345678\n' 0 ;;
+    *) exit 90 ;;
+esac

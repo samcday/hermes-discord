@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+
+require mkosi
+require qemu-img
+image=mkosi.output/hermes-voice
+options=()
+if [[ ${1:-} == --base-image ]]; then
+    shift
+    # Never overwrite the enrolled image or reuse its cache for public builds.
+    image=mkosi.output/base/hermes-discord-base
+    options+=(--output-directory=mkosi.output/base --output=hermes-discord-base
+        --cache-directory=mkosi.cache/base)
+else
+    require ssh-keygen
+    umask 077
+    mkdir -p "$STATE_DIR"
+    if [[ ! -f "$STATE_DIR/id_ed25519" ]]; then
+        ssh-keygen -q -t ed25519 -N '' -C hermes-voice-management \
+            -f "$STATE_DIR/id_ed25519"
+    fi
+    # Pass only the public key, never its private-key directory or an agent socket.
+    printf 'no-agent-forwarding,no-port-forwarding,no-X11-forwarding %s\n' \
+        "$(ssh-keygen -y -f "$STATE_DIR/id_ed25519")" \
+        > "$STATE_DIR/authorized_keys"
+    options+=(--extra-tree="$STATE_DIR/authorized_keys:/root/.ssh/authorized_keys")
+fi
+
+# The private-key mask must not leak into the guest OS build. mkosi generates
+# ordinary metadata such as /usr/lib/os-release, which every guest user reads.
+umask 022
+cd "$PROJECT_DIR"
+mkosi "$@" "${options[@]}" build
+# libvirt's provider copies bytes, not sparse extents. Import compact qcow2
+# rather than streaming twenty gigabytes of mostly-zero raw image.
+qemu-img convert -f raw -O qcow2 "$image.raw" "$image.qcow2"
+qemu-img resize -f qcow2 "$image.qcow2" 20G

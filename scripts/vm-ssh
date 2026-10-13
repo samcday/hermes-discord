@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+
+require ssh
+[[ -f "$STATE_DIR/id_ed25519" ]] || die 'Run just build first.'
+tty=auto
+if [[ ${1:-} == --tty ]]; then
+    tty=force
+    shift
+fi
+
+# A replacement guest gets new SSH host keys even with an unchanged image.
+# Trust each libvirt incarnation on first use over the local passt forward;
+# changed keys within that incarnation are still rejected.
+instance_id="$("$PROJECT_DIR/scripts/tofu" output -raw instance_id)"
+[[ $instance_id =~ ^[a-f0-9-]{36}$ ]] || die 'No applied VM identity; run just up.'
+exec ssh -F /dev/null \
+    -o "RequestTTY=$tty" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o IdentitiesOnly=yes \
+    -o IdentityAgent=none \
+    -o ForwardAgent=no \
+    -o ClearAllForwardings=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -o "HostKeyAlias=hermes-voice-$instance_id" \
+    -o "UserKnownHostsFile=$STATE_DIR/known_hosts" \
+    -o GlobalKnownHostsFile=/dev/null \
+    -i "$STATE_DIR/id_ed25519" \
+    -p "$SSH_PORT" root@127.0.0.1 "$@"

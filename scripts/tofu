@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+
+require tofu
+umask 077
+mkdir -p "$STATE_DIR"
+root=runtime
+if [[ ${1:-} == storage ]]; then
+    root=storage
+    shift
+fi
+export TF_DATA_DIR="$STATE_DIR/tofu-$root"
+export TF_VAR_image="$PROJECT_DIR/mkosi.output/hermes-voice.qcow2"
+export TF_VAR_storage_dir="$STATE_DIR/volumes"
+export TF_VAR_storage_state="$STATE_DIR/storage.tfstate"
+
+# Native libvirt knows how to activate the user's daemon; the provider's Go
+# client does not. Fedora uses the modular qemu socket, not libvirt-sock.
+require virsh
+virsh --connect "$LIBVIRT_URI" list --all >/dev/null
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export TF_VAR_libvirt_uri="$LIBVIRT_URI"
+if [[ -S "$runtime_dir/libvirt/virtqemud-sock" ]]; then
+    export TF_VAR_libvirt_uri="$LIBVIRT_URI?socket=$runtime_dir/libvirt/virtqemud-sock"
+fi
+
+if [[ ${1:-} == init ]]; then
+    shift
+    exec tofu -chdir="$PROJECT_DIR/infra/$root" init \
+        -backend-config="path=$STATE_DIR/$root.tfstate" "$@"
+fi
+exec tofu -chdir="$PROJECT_DIR/infra/$root" "$@"

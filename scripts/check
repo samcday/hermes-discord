@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+cd "$PROJECT_DIR"
+
+files=()
+for file in scripts/* mkosi.postinst mkosi.extra/usr/local/libexec/hermes-voice/* \
+    tests/*.sh tests/configure-discord/*; do
+    bash -n "$file"
+    [[ $file == scripts/common ]] || files+=("$file")
+done
+shellcheck -x "${files[@]}"
+bash tests/build.sh
+bash tests/configure-discord.sh
+tofu fmt -check -recursive infra
+
+# Fresh metadata and disabled backends keep validation away from live VM state.
+tofu_data="$(mktemp -d)"
+trap 'rm -rf -- "$tofu_data"' EXIT
+for root in storage runtime; do
+    TF_DATA_DIR="$tofu_data/$root" tofu -chdir="infra/$root" init \
+        -backend=false -input=false -lockfile=readonly
+    TF_DATA_DIR="$tofu_data/$root" tofu -chdir="infra/$root" validate
+done
+
+SYSTEMD_PAGER=cat PAGER=cat mkosi summary >/dev/null
+printf 'Shell, credential fixtures, HCL and mkosi descriptor checks passed.\n'

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+
+# File presence is a readiness guard, not a claim that provider entitlements
+# work. Real authentication/connectivity is checked by the running gateway.
+"$PROJECT_DIR/scripts/vm-ssh" \
+    'test -s /var/lib/hermes/.hermes/auth.json && test -s /var/lib/hermes/.hermes/.env' ||
+    die 'Complete just discord and just login before activating the gateway.'
+"$PROJECT_DIR/scripts/vm-ssh" \
+    'runuser -u hermes -- touch /var/lib/hermes/.hermes/voice-ready && systemctl restart hermes-voice.service && systemctl is-active hermes-voice.service'

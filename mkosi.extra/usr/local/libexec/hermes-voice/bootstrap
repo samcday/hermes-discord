@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $(id -un) == hermes ]] || {
+    printf 'Run bootstrap as the hermes user.\n' >&2
+    exit 1
+}
+export HOME=/var/lib/hermes
+export HERMES_HOME="$HOME/.hermes"
+export HF_HOME="$HOME/.cache/huggingface"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin"
+cd "$HOME"
+revision=818c13be1dc4fd28987e1e881a9408224afd4535
+installer_sha=14b4c89518cf0e4e71841708dd5d8a28f1f494d22cd20e12f4d5eeb29c7d2fdb
+
+umask 077
+installer=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+curl --fail --location --retry 3 \
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/$revision/scripts/install.sh" \
+    -o "$installer"
+printf '%s  %s\n' "$installer_sha" "$installer" | sha256sum --check -
+bash "$installer" \
+    --commit "$revision" \
+    --dir "$HERMES_HOME/hermes-agent" \
+    --non-interactive --skip-browser --skip-computer-use
+
+[[ $(git -C "$HERMES_HOME/hermes-agent" rev-parse HEAD) == "$revision" ]] || {
+    printf 'Hermes checkout does not match the pinned revision.\n' >&2
+    exit 1
+}
+"$HERMES_HOME/hermes-agent/.hermes/bin/hermes" pm install \
+    --extra discord --extra stt-whisper --extra edge-tts

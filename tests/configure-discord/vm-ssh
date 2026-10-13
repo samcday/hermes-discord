@@ -1,0 +1,38 @@
+#!/usr/bin/bash
+# Fixture only: argv must contain only a fixed command, never the token.
+set -euo pipefail
+guest=/usr/local/libexec/hermes-voice/configure-discord
+for name in response token allowed_user captured payload discord_token discord_user; do
+    # Check only our shell variable names; never dump/inspect the host environment.
+    [[ ! -v $name ]] || exit 91
+done
+if [[ $# == 3 && $1 == test && $2 == -x && $3 == "$guest" ]]; then
+    printf 'check\n' >> "$TEST_EVENT_LOG"
+    [[ $STUB_UNREACHABLE == 0 ]] || exit 255
+    exit 0
+fi
+[[ $# == 1 && $1 == "$guest" ]] || exit 90
+printf 'write\n' >> "$TEST_EVENT_LOG"
+if [[ $STUB_WRITE_FAIL == 1 ]]; then
+    # Simulate an untrustworthy remote diagnostic; the host must suppress it.
+    IFS= read -r discarded
+    printf '%s\n' "$discarded"
+    printf '%s\n' "$discarded" >&2
+    exit 4
+fi
+# shellcheck disable=SC1090
+source "$TEST_GUEST_HELPER"
+fixture_write() {
+    # Dynamically scoped locals consumed by the sourced guest functions.
+    # shellcheck disable=SC2034
+    local +x discord_token discord_user
+    if ! discord_read_input; then
+        printf 'Invalid fixture input.\n' >&2
+        return 2
+    fi
+    if ! discord_update_env "$TEST_HOME" >/dev/null 2>&1; then
+        printf 'Unsafe fixture destination.\n' >&2
+        return 2
+    fi
+}
+fixture_write

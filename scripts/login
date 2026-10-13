@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname -- "$0")/common"
+
+require kgx
+"$PROJECT_DIR/scripts/vm-ssh" test -x \
+    /var/lib/hermes/.hermes/hermes-agent/.hermes/bin/hermes
+# Hermes owns OAuth and model selection. Keep its interactive flow in a real
+# desktop terminal, rather than scraping login codes or collecting passwords.
+exec kgx --title='Hermes — select ChatGPT / Codex Subscription' -- \
+    "$PROJECT_DIR/scripts/vm-ssh" --tty \
+    /usr/local/libexec/hermes-voice/agent model

@@ -1,0 +1,60 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install OpenTofu 1.12.3
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2.0.2
+        with:
+          tofu_version: 1.12.3
+          tofu_wrapper: false
+
+      - name: Install mkosi 26
+        # mkosi is not published on PyPI and ships no release tarball, so the
+        # source tarball is taken from the upstream v26 tag, verified by its
+        # SHA-256. Only `mkosi summary` runs; no image build tools are needed.
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/mkosi-v26.tar.gz" \
+            https://github.com/systemd/mkosi/archive/refs/tags/v26.tar.gz
+          echo '3a906ad0bd8903638ff8979878b96897df5a0b0ac04b9f98360a460235c38276  mkosi-v26.tar.gz' | sha256sum -c -
+          python3 -m pip install --user --break-system-packages "$RUNNER_TEMP/mkosi-v26.tar.gz"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install just 1.57.0 and ShellCheck 0.11.0
+        # The runner's apt versions (just 1.21, ShellCheck 0.9) lag the
+        # versions the scripts are developed against, so both come from their
+        # upstream releases, verified by SHA-256.
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.57.0/just-1.57.0-x86_64-unknown-linux-musl.tar.gz
+          echo '45b548094283cb9739af8f13273b8cddeee869f5b4ef2bb631b1f311cb566155  just.tar.gz' | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck.tar.xz' | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP" shellcheck-v0.11.0/shellcheck
+          install -m 0755 "$RUNNER_TEMP/just" \
+            "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" "$HOME/.local/bin"
+
+      - name: Run check
+        run: just check

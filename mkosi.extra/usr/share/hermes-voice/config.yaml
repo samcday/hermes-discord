@@ -1,0 +1,33 @@
+# First-boot defaults. The live copy lives on the persistent disk so Hermes'
+# model wizard and subsequent user configuration survive OS replacement.
+model:
+  provider: openai-codex
+auth:
+  adopt_external_logins: false
+terminal:
+  backend: local
+  cwd: /var/lib/hermes/workspace
+platform_toolsets:
+  discord: [terminal, file, memory, skills, session_search, clarify, tts]
+stt:
+  provider: local
+  local:
+    model: base
+    device: cpu
+    compute_type: int8
+tts:
+  provider: edge
+approvals:
+  mode: manual
+  timeout: 300
+  cron_mode: deny
+  single_query_mode: deny
+  unattended_mode: deny
+command_allowlist: []
+platforms:
+  discord:
+    enabled: true
+  api_server:
+    enabled: false
+  webhook:
+    enabled: false

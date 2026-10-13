@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+# A failed rename must leave the original .env intact and remove the temporary.
+set -euo pipefail
+[[ ${STUB_RENAME_FAIL:-0} != 1 ]] || exit 73
+exec /usr/bin/mv "$@"

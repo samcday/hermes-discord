@@ -1,0 +1,83 @@
+name: base image
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/image.yml
+      - mkosi.conf
+      - mkosi.postinst
+      - mkosi.extra/**
+      - mkosi.repart/**
+      - scripts/build
+      - scripts/common
+      - tests/build.sh
+      - tests/image-smoke.py
+      - justfile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: quay.io/fedora/fedora:44@sha256:8ade22c0f76f6b2f0892290b1fb39fa1bda1566ba6e276a2ed427f45589c159b
+      # mkosi needs mount namespaces and SELinux xattrs, not KVM or a live guest.
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y \
+            mkosi-26-3.fc44 mkosi-system-deps-26-3.fc44 \
+            systemd-ukify policycoreutils git-core curl-minimal util-linux \
+            qemu-img e2fsprogs zstd tar gzip
+
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install just 1.57.0
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o just.tar.gz \
+            https://github.com/casey/just/releases/download/1.57.0/just-1.57.0-x86_64-unknown-linux-musl.tar.gz
+          echo '45b548094283cb9739af8f13273b8cddeee869f5b4ef2bb631b1f311cb566155  just.tar.gz' | sha256sum -c -
+          tar -xzf just.tar.gz just
+          install -m 0755 just /usr/local/bin/just
+
+      - name: Build without management enrollment
+        run: |
+          # The workspace bind mount supports SELinux xattrs; container overlayfs does not.
+          mkdir -p mkosi.workspace
+          just build --base-image --workspace-directory="$GITHUB_WORKSPACE/mkosi.workspace"
+
+      - name: Inspect the image offline
+        run: just image-check
+
+      - name: Compress and checksum the image
+        working-directory: mkosi.output/base
+        run: |
+          zstd -T0 --force hermes-discord-base.qcow2
+          sha256sum hermes-discord-base.qcow2.zst hermes-discord-base.manifest > SHA256SUMS
+
+      - name: Upload clean build outputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: hermes-discord-base-${{ github.sha }}
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            mkosi.output/base/hermes-discord-base.qcow2.zst
+            mkosi.output/base/hermes-discord-base.manifest
+            mkosi.output/base/SHA256SUMS

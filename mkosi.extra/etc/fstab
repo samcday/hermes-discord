@@ -1,0 +1,3 @@
+# Format only a genuinely empty, specifically identified data disk. Never fall
+# back to an ephemeral HOME when it is missing; failed state mounting fails boot.
+/dev/disk/by-id/virtio-hermes-state /var/lib/hermes ext4 defaults,nodev,nosuid,x-systemd.makefs,x-systemd.device-timeout=30s 0 2

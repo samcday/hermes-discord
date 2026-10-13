@@ -1,0 +1,81 @@
+#!/usr/bin/bash
+# Run on the host only after the guest is ready. No credentials in argv, exported
+# environment, temporary files, diagnostics, or tracing; the transport is stdin.
+set +x
+set +v
+set +a
+set -o pipefail
+export LC_ALL=C
+umask 077
+ulimit -c 0
+
+fail() {
+    builtin printf '%s\n' "$1" >&2
+    exit 2
+}
+
+capture_form() {
+    local +x captured
+    # A NUL or an oversized response is an error, not silently truncated input.
+    # The marker preserves Zenity's final newline through command substitution.
+    if IFS= read -r -d '' -n 1100 captured; then
+        return 2
+    fi
+    builtin printf '%s.' "$captured"
+}
+
+main() {
+    local +x response token allowed_user status vm_ssh guest_helper
+    [[ $# == 0 ]] || fail 'Usage: configure-discord (no arguments).'
+    vm_ssh=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/vm-ssh
+    guest_helper=/usr/local/libexec/hermes-voice/configure-discord
+    [[ -x $vm_ssh ]] || fail 'The VM management SSH helper is unavailable.'
+    command -v zenity >/dev/null || fail 'Zenity is required to collect Discord credentials.'
+
+    # No prompt until SSH works and the image has installed the guest helper.
+    "$vm_ssh" test -x "$guest_helper" </dev/null >/dev/null 2>&1 ||
+        fail 'The guest is not ready; Discord settings were not changed.'
+
+    if response=$(
+        zenity --forms --title='Configure Hermes Discord' \
+            --text='Enter the bot token and your Discord user ID. Existing pairing approvals are not revoked.' \
+            --add-password='Discord bot token' \
+            --add-entry='Discord allowed-user ID (numeric)' \
+            --separator='|' 2>/dev/null | capture_form
+    ); then
+        response=${response%.}
+    else
+        status=$?
+        unset response
+        # Zenity cancellation/window close: no guest writes and no second dialog.
+        [[ $status == 1 ]] && return 1
+        fail 'The Discord credential prompt failed; settings were not changed.'
+    fi
+
+    [[ $response == *$'\n' ]] || fail 'Invalid Discord credentials; settings were not changed.'
+    response=${response%$'\n'}
+    [[ $response == *'|'* ]] || fail 'Invalid Discord credentials; settings were not changed.'
+    token=${response%%|*}
+    allowed_user=${response#*|}
+    # Discord tokens use this ASCII alphabet. Do not try authenticating here.
+    [[ $token =~ ^[A-Za-z0-9._-]{1,1024}$ &&
+       $allowed_user =~ ^[1-9][0-9]{0,19}$ ]] ||
+        fail 'Invalid Discord credentials; use a bot token and one numeric user ID.'
+    # Equal-length decimal strings compare lexically; Bash integers are signed.
+    # shellcheck disable=SC2071
+    if [[ ${#allowed_user} == 20 && $allowed_user > 18446744073709551615 ]]; then
+        fail 'Invalid Discord user ID; settings were not changed.'
+    fi
+
+    # printf is a shell builtin: the token is never an external command argument.
+    # Suppress remote output too, including accidental diagnostics from a wrapper.
+    if ! builtin printf '%s\n' "$response" |
+        "$vm_ssh" "$guest_helper" >/dev/null 2>&1; then
+        unset response token allowed_user
+        fail 'Could not save Discord settings in the guest.'
+    fi
+    unset response token allowed_user
+    builtin printf '%s\n' 'Discord settings saved. Hermes was not started.'
+}
+
+main "$@"

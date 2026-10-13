@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+ln -sfn /run/systemd/resolve/stub-resolv.conf "$BUILDROOT/etc/resolv.conf"
+if [ -f "$BUILDROOT/root/.ssh/authorized_keys" ]; then
+    chmod 0700 "$BUILDROOT/root/.ssh"
+    chmod 0600 "$BUILDROOT/root/.ssh/authorized_keys"
+fi
+chmod 0755 "$BUILDROOT"/usr/local/libexec/hermes-voice/*
